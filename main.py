@@ -7,8 +7,9 @@ import aiosqlite
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from dotenv import load_dotenv
 
@@ -60,14 +61,26 @@ async def delete_task(task_id: int):
         await db.commit()
 
 
-def tasks_keyboard(tasks) -> "InlineKeyboardBuilder":
+async def clear_tasks(user_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM tasks WHERE user_id = ?", (user_id,))
+        await db.commit()
+
+
+def tasks_keyboard(tasks):
     builder = InlineKeyboardBuilder()
     for task_id, text, done in tasks:
         mark = "✅" if done else "⬜️"
         builder.button(text=f"{mark} {text}", callback_data=f"toggle:{task_id}")
         builder.button(text="🗑", callback_data=f"del:{task_id}")
     builder.adjust(2)
+    builder.row(InlineKeyboardButton(text="🧹 Hammasini tozalash", callback_data="clear_all"))
     return builder.as_markup()
+
+
+def header(tasks) -> str:
+    done = sum(1 for _, _, d in tasks if d)
+    return f"🗒 <b>Vazifalar</b> (bajarilgan {done}/{len(tasks)}):"
 
 
 async def show_tasks(message: Message, user_id: int):
@@ -75,23 +88,52 @@ async def show_tasks(message: Message, user_id: int):
     if not tasks:
         await message.answer("📭 Vazifalar yo'q. Yangi vazifani yozib yuboring.")
         return
-    await message.answer("🗒 <b>Sizning vazifalaringiz:</b>", reply_markup=tasks_keyboard(tasks))
+    await message.answer(header(tasks), reply_markup=tasks_keyboard(tasks))
+
+
+async def refresh(callback: CallbackQuery):
+    tasks = await get_tasks(callback.from_user.id)
+    try:
+        if tasks:
+            await callback.message.edit_text(header(tasks), reply_markup=tasks_keyboard(tasks))
+        else:
+            await callback.message.edit_text("📭 Vazifalar yo'q.")
+    except TelegramBadRequest:
+        pass
 
 
 @dp.message(CommandStart())
 async def start(message: Message):
     await message.answer(
         "✅ <b>Todo Bot</b>ga xush kelibsiz!\n\n"
-        "• Vazifa qo'shish — uni shunchaki yozib yuboring\n"
+        "• Vazifa qo'shish — uni yozib yuboring\n"
         "• /list — vazifalar ro'yxati\n"
-        "• ⬜️/✅ tugmasi — bajarilgan deb belgilash\n"
-        "• 🗑 tugmasi — o'chirish"
+        "• ⬜️/✅ — bajarilgan deb belgilash\n"
+        "• 🗑 — o'chirish   • /clear — hammasini o'chirish"
+    )
+
+
+@dp.message(Command("help"))
+async def help_cmd(message: Message):
+    await message.answer(
+        "✅ <b>Todo Bot</b> — yordam\n\n"
+        "• Matn yuboring → vazifa qo'shiladi\n"
+        "• /list — ro'yxat\n"
+        "• ⬜️/✅ tugmasi — holatni o'zgartirish\n"
+        "• 🗑 — bittasini o'chirish\n"
+        "• /clear — barcha vazifalarni o'chirish"
     )
 
 
 @dp.message(Command("list"))
 async def list_cmd(message: Message):
     await show_tasks(message, message.from_user.id)
+
+
+@dp.message(Command("clear"))
+async def clear_cmd(message: Message):
+    await clear_tasks(message.from_user.id)
+    await message.answer("🧹 Barcha vazifalar o'chirildi.")
 
 
 @dp.message(F.text)
@@ -102,26 +144,28 @@ async def add(message: Message):
     await show_tasks(message, message.from_user.id)
 
 
-async def _refresh(callback: CallbackQuery):
-    tasks = await get_tasks(callback.from_user.id)
-    if tasks:
-        await callback.message.edit_reply_markup(reply_markup=tasks_keyboard(tasks))
-    else:
-        await callback.message.edit_text("📭 Vazifalar yo'q.")
-
-
 @dp.callback_query(F.data.startswith("toggle:"))
 async def toggle(callback: CallbackQuery):
     await toggle_task(int(callback.data.split(":")[1]))
     await callback.answer("Holat o'zgartirildi")
-    await _refresh(callback)
+    await refresh(callback)
 
 
 @dp.callback_query(F.data.startswith("del:"))
 async def delete(callback: CallbackQuery):
     await delete_task(int(callback.data.split(":")[1]))
     await callback.answer("O'chirildi")
-    await _refresh(callback)
+    await refresh(callback)
+
+
+@dp.callback_query(F.data == "clear_all")
+async def clear_all(callback: CallbackQuery):
+    await clear_tasks(callback.from_user.id)
+    await callback.answer("Hammasi tozalandi")
+    try:
+        await callback.message.edit_text("📭 Vazifalar yo'q.")
+    except TelegramBadRequest:
+        pass
 
 
 async def main():
