@@ -15,7 +15,7 @@ import aiosqlite
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -42,6 +42,10 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[
+        logging.FileHandler("bot.log", encoding="utf-8"),
+        logging.StreamHandler(),
+    ],
 )
 logger = logging.getLogger("todo-bot")
 
@@ -286,8 +290,6 @@ class ErrorMiddleware:
             return await handler(event, data)
         except TelegramBadRequest as e:
             logger.warning("TelegramBadRequest: %s", e)
-        except TelegramNetworkError as e:
-            logger.error("TelegramNetworkError: %s", e)
         except Exception as e:
             logger.exception("Kutilmagan xatolik: %s", e)
         return None
